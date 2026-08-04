@@ -1,0 +1,219 @@
+name: Publish Trade OS APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Version name, for example 1.0.6"
+        required: true
+        type: string
+      version_code:
+        description: "Android versionCode, for example 6"
+        required: true
+        type: string
+      apk_url:
+        description: "Direct HTTPS URL of the completed APK"
+        required: true
+        type: string
+      required_update:
+        description: "Force users to update"
+        required: true
+        default: false
+        type: boolean
+      update_title:
+        description: "Update-dialog title"
+        required: true
+        default: "Trade OS update available"
+        type: string
+      update_message:
+        description: "Short update-dialog message"
+        required: true
+        default: "A new version of Trade OS is ready."
+        type: string
+      release_notes:
+        description: "Release notes"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trade-os-apk-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release inputs
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          APK_URL: ${{ inputs.apk_url }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$VERSION_NAME" | grep -Eq '^[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.-]+)?$'; then
+            echo "Invalid version name: $VERSION_NAME"
+            exit 1
+          fi
+
+          if ! printf '%s' "$VERSION_CODE" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "versionCode must be a positive integer."
+            exit 1
+          fi
+
+          if ! printf '%s' "$APK_URL" | grep -Eq '^https://'; then
+            echo "APK URL must use HTTPS."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          metadata = json.loads(Path("latest.json").read_text())
+          old_code = int(metadata.get("versionCode", 0))
+          new_code = int(os.environ["VERSION_CODE"])
+
+          if new_code <= old_code:
+              raise SystemExit(
+                  f"New versionCode {new_code} must be greater than current versionCode {old_code}."
+              )
+          PY
+
+          TAG="v${VERSION_NAME}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists."
+            exit 1
+          fi
+
+      - name: Download APK
+        env:
+          APK_URL: ${{ inputs.apk_url }}
+        run: |
+          set -euo pipefail
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-delay 3 \
+            --connect-timeout 30 \
+            --max-time 1800 \
+            --output trade-os.apk \
+            "$APK_URL"
+
+          test -s trade-os.apk
+
+      - name: Validate APK archive
+        run: |
+          set -euo pipefail
+
+          file trade-os.apk
+
+          python3 - <<'PY'
+          import zipfile
+
+          path = "trade-os.apk"
+          if not zipfile.is_zipfile(path):
+              raise SystemExit("Downloaded file is not a valid APK/ZIP archive.")
+
+          with zipfile.ZipFile(path) as archive:
+              names = set(archive.namelist())
+              if "AndroidManifest.xml" not in names:
+                  raise SystemExit("APK does not contain AndroidManifest.xml.")
+
+          print("APK archive validation passed.")
+          PY
+
+      - name: Create checksum
+        run: |
+          set -euo pipefail
+          sha256sum trade-os.apk | tee trade-os.apk.sha256
+
+      - name: Update latest.json
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          REQUIRED_UPDATE: ${{ inputs.required_update }}
+          UPDATE_TITLE: ${{ inputs.update_title }}
+          UPDATE_MESSAGE: ${{ inputs.update_message }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          apk_path = Path("trade-os.apk")
+          digest = hashlib.sha256(apk_path.read_bytes()).hexdigest()
+
+          metadata = {
+              "versionName": os.environ["VERSION_NAME"],
+              "versionCode": int(os.environ["VERSION_CODE"]),
+              "apkUrl": "https://github.com/iamhizbi/trade-os-releases/releases/latest/download/trade-os.apk",
+              "checksumUrl": "https://github.com/iamhizbi/trade-os-releases/releases/latest/download/trade-os.apk.sha256",
+              "required": os.environ["REQUIRED_UPDATE"].lower() == "true",
+              "title": os.environ["UPDATE_TITLE"],
+              "message": os.environ["UPDATE_MESSAGE"],
+              "releaseNotes": os.environ.get("RELEASE_NOTES", ""),
+              "publishedAt": datetime.now(timezone.utc).isoformat(),
+              "sha256": digest,
+              "sizeBytes": apk_path.stat().st_size,
+          }
+
+          Path("latest.json").write_text(
+              json.dumps(metadata, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          cat latest.json
+
+      - name: Commit version metadata
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add latest.json
+          git commit -m "Publish Trade OS v${VERSION_NAME} metadata"
+          git push origin HEAD:main
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="$(mktemp)"
+          if [ -n "$RELEASE_NOTES" ]; then
+            printf '%s\n' "$RELEASE_NOTES" > "$NOTES_FILE"
+          else
+            printf 'Trade OS Android v%s\n' "$VERSION_NAME" > "$NOTES_FILE"
+          fi
+
+          gh release create "v${VERSION_NAME}" \
+            trade-os.apk \
+            trade-os.apk.sha256 \
+            --target main \
+            --title "Trade OS v${VERSION_NAME}" \
+            --notes-file "$NOTES_FILE" \
+            --latest

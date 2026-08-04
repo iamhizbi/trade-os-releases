@@ -1,0 +1,13 @@
+{
+  "versionName": "0.0.0",
+  "versionCode": 0,
+  "apkUrl": "https://github.com/iamhizbi/trade-os-releases/releases/latest/download/trade-os.apk",
+  "checksumUrl": "https://github.com/iamhizbi/trade-os-releases/releases/latest/download/trade-os.apk.sha256",
+  "required": false,
+  "title": "Trade OS is up to date",
+  "message": "No Android release has been published yet.",
+  "releaseNotes": "",
+  "publishedAt": null,
+  "sha256": null,
+  "sizeBytes": 0
+}
