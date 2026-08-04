@@ -182,19 +182,6 @@ jobs:
 
           cat latest.json
 
-      - name: Commit version metadata
-        env:
-          VERSION_NAME: ${{ inputs.version_name }}
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add latest.json
-          git commit -m "Publish Trade OS v${VERSION_NAME} metadata"
-          git push origin HEAD:main
-
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -217,3 +204,16 @@ jobs:
             --title "Trade OS v${VERSION_NAME}" \
             --notes-file "$NOTES_FILE" \
             --latest
+
+      - name: Commit version metadata
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add latest.json
+          git commit -m "Publish Trade OS v${VERSION_NAME} metadata"
+          git push origin HEAD:main
