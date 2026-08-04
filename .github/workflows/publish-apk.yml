@@ -96,22 +96,35 @@ jobs:
             exit 1
           fi
 
-      - name: Download APK
+           - name: Download APK
         env:
           APK_URL: ${{ inputs.apk_url }}
         run: |
           set -euo pipefail
+
           curl \
             --fail \
             --location \
+            --compressed \
             --retry 3 \
             --retry-delay 3 \
             --connect-timeout 30 \
             --max-time 1800 \
-            --output trade-os.apk \
+            --output downloaded-artifact \
             "$APK_URL"
 
+          test -s downloaded-artifact
+
+          # Some EAS/CDN links return the APK wrapped in gzip compression.
+          if file downloaded-artifact | grep -qi "gzip compressed"; then
+            echo "Gzip-compressed APK detected. Decompressing..."
+            gzip -dc downloaded-artifact > trade-os.apk
+          else
+            mv downloaded-artifact trade-os.apk
+          fi
+
           test -s trade-os.apk
+          file trade-os.apk
 
       - name: Validate APK archive
         run: |
